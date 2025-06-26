@@ -1,0 +1,152 @@
+# -*- coding: utf-8 -*-
+"""
+Modeling and scoring criticality with logistic regression for electricity facilities
+"""
+
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    confusion_matrix, classification_report, roc_auc_score, roc_curve
+)
+import matplotlib.pyplot as plt
+
+# 1. LOAD DATA
+df = pd.read_excel(r"your_data.xlsx")  # Change path as needed
+
+# 2. SELECT RELEVANT FEATURES FOR MODEL
+cols = [
+    'Sum of X',
+    'Sum of Y',
+    'Sum of Z',
+    'Sum of T',
+    'K'
+]
+
+# 3. NORMALIZATION (SCALE TO 0-1)
+scaler = MinMaxScaler()
+df_norm = pd.DataFrame(scaler.fit_transform(df[cols]), columns=[col+'_norm' for col in cols])
+df = pd.concat([df, df_norm], axis=1)
+
+# 4. PSEUDO-LABEL: AUTOMATIC CRITICAL/NON-CRITICAL TAGGING
+norm_cols = [col+'_norm' for col in cols]
+for col in norm_cols:
+    df[f"{col}_high"] = df[col] > df[col].quantile(0.9)
+high_cols = [f"{col}_high" for col in norm_cols]
+df['critical'] = df[high_cols].any(axis=1).astype(int)
+
+# 5. LOGISTIC REGRESSION MODEL
+X = df[norm_cols]
+y = df['critical']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# 6. MODEL PERFORMANCE
+y_test_pred = model.predict(X_test)
+y_test_score = model.predict_proba(X_test)[:, 1]
+
+print("\nTest Set Confusion Matrix:\n", confusion_matrix(y_test, y_test_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_test_pred))
+print(f"Test ROC AUC Score: {roc_auc_score(y_test, y_test_score):.3f}")
+
+# ROC Curve
+fpr, tpr, thresholds = roc_curve(y_test, y_test_score)
+plt.figure(figsize=(6, 4))
+plt.plot(fpr, tpr, label="ROC curve", linewidth=2)
+plt.plot([0, 1], [0, 1], 'k--', label="Random")
+plt.xlabel("False Positive Rate (1 - Specificity)")
+plt.ylabel("True Positive Rate (Sensitivity/Recall)")
+plt.title("ROC Curve - Criticality Model")
+plt.legend(loc="lower right")
+plt.grid(True)
+plt.show()
+
+# 7. CRITICALITY SCORING (predict_proba)
+df['criticality_score'] = model.predict_proba(X)[:, 1]   # Probability 0-1
+df['criticality_score_100'] = (df['criticality_score'] * 100).round(2)  # Rescaled to 0-100
+
+# 8. COEFFICIENTS (Feature importance)
+print("\nModel Coefficients (Feature Importances):")
+for col, coef in zip(norm_cols, model.coef_[0]):
+    print(f"{col}: {coef:.3f}")
+
+# 9. SAVE OUTPUT
+df.to_excel("facility_criticality_score_logreg.xlsx", index=False)
+print("\nCriticality scores and tags saved as: facility_criticality_score_logreg.xlsx")
+
+
+
+# --- MAPPING AND VISUALIZATION ---
+
+"""
+Criticality analysis of electricity infrastructure: Facility-based scoring and visualization
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import folium
+from matplotlib.colors import rgb2hex
+
+# 1. LOAD DATA WITH COORDINATES
+df = pd.read_excel(r"facility_criticality_score_logreg.xlsx")
+
+# 2. CLEAN LATITUDE/LONGITUDE COLUMNS & CONVERT TO FLOAT
+df['Facility_Coordinate_Latitude'] = (
+    df['Facility_Coordinate_Latitude'].astype(str).str.replace(',', '.').astype(float)
+)
+df['Facility_Coordinate_Longitude'] = (
+    df['Facility_Coordinate_Longitude'].astype(str).str.replace(',', '.').astype(float)
+)
+
+# 3. NORMALIZE CRITICALITY SCORE (OPTIONAL, for color scaling)
+df['criticality_norm'] = (
+    (df['criticality_score'] - df['criticality_score'].min()) /
+    (df['criticality_score'].max() - df['criticality_score'].min())
+)
+
+# 4. SETUP COLORMAP AND COLOR CALCULATION (RED = MOST CRITICAL)
+colormap = plt.colormaps['RdYlGn_r']  # Reverse: red=high, green=low
+
+def score_to_color(score):
+    rgba = colormap(score)
+    return rgb2hex(rgba)
+
+df['color_code'] = df['criticality_norm'].apply(score_to_color)
+
+# 5. SET MAP CENTER (e.g., Ankara, Turkey)
+center_lat, center_lon = 39.9334, 32.8597
+
+# 6. CREATE FOLIUM MAP
+m = folium.Map(location=[center_lat, center_lon], zoom_start=7)
+
+# 7. ADD POINTS (COLORED, WITH POPUP)
+for _, row in df.iterrows():
+    folium.CircleMarker(
+        location=[row['Facility_Coordinate_Latitude'], row['Facility_Coordinate_Longitude']],
+        radius=5,
+        color=row['color_code'],
+        fill=True,
+        fill_color=row['color_code'],
+        fill_opacity=0.8,
+        popup=(
+            f"<b>Facility:</b> {row['FACILITY']}<br>"
+            f"<b>Criticality Score:</b> {row['criticality_score']:.2f}<br>"
+            f"<b>Normalized Score:</b> {row['criticality_norm']:.2f}"
+        )
+    ).add_to(m)
+
+# 8. SAVE MAP
+m.save("facility_criticality_map_final.html")
+print("Map saved as: facility_criticality_map_final.html")
+
+# 9. OPTIONAL: ANALYZE TOP %10 CRITICAL (RED) POINTS
+red_count = (df['criticality_norm'] >= 0.9).sum()
+red_ratio = 100 * red_count / len(df)
+print(f"Facilities in the top 10% criticality (red): {red_count} ({red_ratio:.2f}%)")
