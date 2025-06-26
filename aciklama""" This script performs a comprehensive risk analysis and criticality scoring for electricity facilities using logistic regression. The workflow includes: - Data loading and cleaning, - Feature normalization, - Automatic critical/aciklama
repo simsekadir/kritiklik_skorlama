@@ -1,0 +1,14 @@
+"""
+This script performs a comprehensive risk analysis and criticality scoring for electricity facilities using logistic regression.
+The workflow includes:
+- Data loading and cleaning,
+- Feature normalization,
+- Automatic critical/non-critical pseudo-labeling,
+- Logistic regression modeling,
+- Model evaluation (confusion matrix, ROC curve, AUC score, feature coefficients),
+- Calculation of a criticality score for each facility,
+- Saving the results,
+- And visualizing the scores on an interactive color-coded map (red = most critical, green = least critical).
+
+All steps are fully reproducible and modular, making the approach easy to adapt for similar infrastructure prioritization problems.
+"""
